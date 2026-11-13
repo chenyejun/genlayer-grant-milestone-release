@@ -44,7 +44,10 @@ Call with the example values above and 5 GEN attached.
 - Expected: returns grant id `1`.
 - Verify with `get_grant(1)`: `funder` is your wallet, `grantee` is the
   second wallet, `total_locked` is `5000000000000000000`, `released` is
-  `0`, `status` is `ACTIVE`, `milestone_ids` is `[1, 2]`.
+  `0`, `status` is `ACTIVE`, `milestone_ids` is `[1, 2]`. Check the
+  stored grantee's `as_hex` matches the address you typed in exactly:
+  a byte-reversed value would mean the form encoded the address int
+  the other way round (see `_as_address` in the contract).
 - Verify with `get_milestone(1, 0)`: `title` is `Outline`, `amount` is
   `2000000000000000000`, `criteria` is `["Outline is public"]`, `status`
   is `PENDING`.
