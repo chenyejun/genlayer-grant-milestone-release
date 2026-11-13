@@ -173,6 +173,88 @@ def test_create_grant_rejects_bad_inputs():
         vm.value = 0
 
 
+def test_create_grant_accepts_string_numbers_from_studio_form():
+    """Studio's write form sends numbers as JSON strings.
+
+    The deployed contract crashed on this exact call on StudioNet with
+    TypeError: unsupported operand type(s) for +: 'int' and 'str': the
+    milestone amounts arrived as ["2000000000000000000",
+    "3000000000000000000"], the criteria counts as ["2", "1"], and the
+    deadline as "1796976000", and the pinned py-genlayer's u256() passes
+    strings through unchanged. The contract coerces every numeric
+    argument itself, so the same call must succeed and store integers.
+    """
+    vm = _setup()
+    with vm.activate():
+        contract, funder, grantee, _stranger = _deploy(vm)
+        vm.sender = funder
+        vm.value = 5 * ONE_GEN
+        grant_id = contract.create_grant(
+            grantee,
+            "Open source grant",
+            "Fund two milestones of open source work.",
+            str(DEADLINE),
+            ["Milestone one", "Milestone two"],
+            [str(2 * ONE_GEN), str(3 * ONE_GEN)],
+            ["2", "1"],
+            ["Code is public", "Tests pass", "Docs updated"],
+        )
+        vm.value = 0
+        assert grant_id == 1
+
+        grant = contract.get_grant(grant_id)
+        assert grant.total_locked == 5 * ONE_GEN
+        assert grant.deadline == DEADLINE
+        assert type(grant.total_locked) is int
+        assert type(grant.deadline) is int
+
+        first = contract.get_milestone(grant_id, 0)
+        assert first.amount == 2 * ONE_GEN
+        assert type(first.amount) is int
+        assert list(first.criteria) == ["Code is public", "Tests pass"]
+        second = contract.get_milestone(grant_id, 1)
+        assert second.amount == 3 * ONE_GEN
+        assert type(second.amount) is int
+        assert list(second.criteria) == ["Docs updated"]
+
+
+def test_create_grant_rejects_non_numeric_string_amount():
+    """A string that is not a whole number fails cleanly.
+
+    int() raises ValueError on "two"; the contract maps that to an
+    [EXPECTED] revert instead of letting a bare exception escape.
+    """
+    vm = _setup()
+    with vm.activate():
+        contract, funder, grantee, _stranger = _deploy(vm)
+        vm.sender = funder
+        vm.value = 5 * ONE_GEN
+        with vm.expect_revert("[EXPECTED] milestone amount must be a whole number"):
+            contract.create_grant(
+                grantee, "G", "D", DEADLINE, ["M"], ["two"], [1], ["C"]
+            )
+        vm.value = 0
+
+
+def test_string_ids_accepted_by_other_methods():
+    """The same form serialization applies to grant and milestone ids.
+
+    A Studio caller passes ids as strings too ("1", "0"); the contract
+    coerces them at the entry of every method that takes one.
+    """
+    vm = _setup()
+    with vm.activate():
+        contract, funder, grantee, _stranger = _deploy(vm)
+        grant_id = _create_grant(contract, vm, funder, grantee)
+
+        assert contract.get_grant("1").total_locked == 5 * ONE_GEN
+        assert list(contract.get_grant_milestones("1")) == [1, 2]
+        assert contract.get_milestone("1", "0").status == "PENDING"
+
+        _submit(contract, vm, grantee, "1", "0")
+        assert contract.get_milestone(grant_id, 0).status == "SUBMITTED"
+
+
 def test_submit_evidence_only_grantee_and_valid_url():
     vm = _setup()
     with vm.activate():
