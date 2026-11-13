@@ -143,6 +143,24 @@ def _now_seconds() -> u256:
     return u256(int(datetime.now(timezone.utc).timestamp()))
 
 
+def _as_u256(value, label: str) -> u256:
+    """Coerce one numeric argument to u256.
+
+    Studio's write form serializes numbers as JSON strings, and the
+    pinned py-genlayer's u256() is a pass-through (typing.NewType), so
+    it does not convert them: u256("2000000000000000000") is still the
+    string, and the first arithmetic on it crashes with
+    TypeError: unsupported operand type(s) for +: 'int' and 'str'. int()
+    normalizes both forms (a no-op on values that are already ints). A
+    string that is not a whole number raises a clean [EXPECTED] revert
+    here instead of letting a bare ValueError escape the contract.
+    """
+    try:
+        return u256(int(value))
+    except (TypeError, ValueError):
+        raise gl.vm.UserError("[EXPECTED] " + label + " must be a whole number")
+
+
 def _require_valid_url(url: str) -> None:
     if not (url.startswith("https://") or url.startswith("http://")):
                     raise gl.vm.UserError("[EXPECTED] evidence URL must start with http:// or https://")
@@ -340,6 +358,12 @@ class GrantMilestoneRelease(gl.Contract):
         value must equal the sum of the milestone amounts exactly. Returns
         the new grant id.
         """
+        # Coerce numeric arguments up front, before any arithmetic,
+        # comparison, or storage (see _as_u256): Studio's write form can
+        # deliver them as strings.
+        deadline = _as_u256(deadline, "deadline")
+        milestone_amounts = [_as_u256(a, "milestone amount") for a in milestone_amounts]
+        criteria_counts = [_as_u256(c, "criteria count") for c in criteria_counts]
         if grantee == Address(bytes(20)):
             raise gl.vm.UserError("[EXPECTED] grantee must not be the zero address")
         if len(title) == 0:
@@ -423,6 +447,8 @@ class GrantMilestoneRelease(gl.Contract):
         appeal_milestone instead, so a failed review cannot be overwritten
         by quietly resubmitting.
         """
+        grant_id = _as_u256(grant_id, "grant id")
+        milestone_index = _as_u256(milestone_index, "milestone index")
         grant = self._require_grant(grant_id)
         if grant.status != GRANT_ACTIVE:
             raise gl.vm.UserError("[EXPECTED] grant is not active")
@@ -454,6 +480,8 @@ class GrantMilestoneRelease(gl.Contract):
         the agreed per-criterion booleans. An approved milestone pays out
         immediately; a rejected appeal is final.
         """
+        grant_id = _as_u256(grant_id, "grant id")
+        milestone_index = _as_u256(milestone_index, "milestone index")
         grant = self._require_grant(grant_id)
         if grant.status != GRANT_ACTIVE:
             raise gl.vm.UserError("[EXPECTED] grant is not active")
@@ -563,6 +591,8 @@ class GrantMilestoneRelease(gl.Contract):
         second rejection after an appeal is final: the milestone moves to
         REJECTED_FINAL and cannot be appealed again.
         """
+        grant_id = _as_u256(grant_id, "grant id")
+        milestone_index = _as_u256(milestone_index, "milestone index")
         grant = self._require_grant(grant_id)
         if grant.status != GRANT_ACTIVE:
             raise gl.vm.UserError("[EXPECTED] grant is not active")
@@ -590,6 +620,7 @@ class GrantMilestoneRelease(gl.Contract):
         the funder in one transfer. Milestones already paid stay paid;
         milestones still open simply stop being reviewable.
         """
+        grant_id = _as_u256(grant_id, "grant id")
         grant = self._require_grant(grant_id)
         if gl.message.sender_address != grant.funder:
             raise gl.vm.UserError("[EXPECTED] only the funder can cancel a grant")
@@ -604,10 +635,13 @@ class GrantMilestoneRelease(gl.Contract):
 
     @gl.public.view
     def get_grant(self, grant_id: u256) -> Grant:
+        grant_id = _as_u256(grant_id, "grant id")
         return self._require_grant(grant_id)
 
     @gl.public.view
     def get_milestone(self, grant_id: u256, milestone_index: u256) -> Milestone:
+        grant_id = _as_u256(grant_id, "grant id")
+        milestone_index = _as_u256(milestone_index, "milestone index")
         grant = self._require_grant(grant_id)
         return self.milestones[self._milestone_id_for(grant, milestone_index)]
 
@@ -617,4 +651,5 @@ class GrantMilestoneRelease(gl.Contract):
 
     @gl.public.view
     def get_grant_milestones(self, grant_id: u256) -> DynArray[u256]:
+        grant_id = _as_u256(grant_id, "grant id")
         return self._require_grant(grant_id).milestone_ids
