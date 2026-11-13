@@ -161,6 +161,49 @@ def _as_u256(value, label: str) -> u256:
         raise gl.vm.UserError("[EXPECTED] " + label + " must be a whole number")
 
 
+def _as_address(value, label: str) -> Address:
+    """Coerce one address argument to a real Address object.
+
+    Same class of problem as _as_u256: Studio's write form does not
+    send an Address-typed argument through the native calldata address
+    encoding, so the hex string typed into the form arrives in the
+    method as a plain int, not an Address. The zero-address check does
+    not catch that (an int never equals an Address), and the first
+    storage write of the value then crashes in AddrDesc.set with
+    AttributeError: 'int' object has no attribute 'as_bytes' — that is
+    exactly how create_grant died twice on StudioNet. The contract
+    normalizes the value itself, before any comparison or storage.
+
+    An int is read as the standard big-endian hex-to-int value (the
+    same number Python's int("0x...", 16) and JS BigInt produce), so
+    int.to_bytes(20, "big") restores the address bytes. Note the SDK's
+    Address.as_int is little-endian and is NOT used here: it is an
+    internal quirk, while every wire convention (hex strings, the ABI
+    codec, EVM uint160) is big-endian. If a future Studio changes the
+    encoding, get_grant shows it immediately: the stored grantee's
+    as_hex would come back byte-reversed instead of matching the
+    address that was typed in.
+
+    A value that is not an address at all (wrong length, negative int,
+    int past 2**160, garbage string) fails here as a clean [EXPECTED]
+    revert instead of a bare exception escaping the contract. bool is
+    rejected explicitly: it is an int subclass, and True/False must
+    never silently become addresses 1 and 0.
+    """
+    if isinstance(value, Address):
+        return value
+    if isinstance(value, bool):
+        raise gl.vm.UserError("[EXPECTED] " + label + " is not a valid address")
+    if isinstance(value, int):
+        if value < 0 or value >= (1 << (Address.SIZE * 8)):
+            raise gl.vm.UserError("[EXPECTED] " + label + " is not a valid address")
+        return Address(value.to_bytes(Address.SIZE, "big"))
+    try:
+        return Address(value)
+    except Exception:
+        raise gl.vm.UserError("[EXPECTED] " + label + " is not a valid address")
+
+
 def _require_valid_url(url: str) -> None:
     if not (url.startswith("https://") or url.startswith("http://")):
                     raise gl.vm.UserError("[EXPECTED] evidence URL must start with http:// or https://")
@@ -364,6 +407,10 @@ class GrantMilestoneRelease(gl.Contract):
         deadline = _as_u256(deadline, "deadline")
         milestone_amounts = [_as_u256(a, "milestone amount") for a in milestone_amounts]
         criteria_counts = [_as_u256(c, "criteria count") for c in criteria_counts]
+        # The grantee arrives from Studio's form as a plain int, not an
+        # Address (see _as_address); normalize before the zero check, or
+        # the check silently passes and the Grant record write crashes.
+        grantee = _as_address(grantee, "grantee")
         if grantee == Address(bytes(20)):
             raise gl.vm.UserError("[EXPECTED] grantee must not be the zero address")
         if len(title) == 0:
