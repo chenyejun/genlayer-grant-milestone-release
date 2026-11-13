@@ -186,6 +186,22 @@ milestones with 2 and 1 criteria pass `criteria_counts = [2, 1]` and
 Milestone amounts are atto GEN; the attached value must equal their sum.
 `deadline` is unix seconds.
 
+Studio's write form sends numbers as JSON strings: milestone amounts
+arrive as e.g. `"2000000000000000000"`, criteria counts as `"2"`, and
+the deadline as `"1796976000"`. The pinned py-genlayer's `u256()` does
+not convert strings (it is a `typing.NewType`, a pass-through at
+runtime), so without coercion the first arithmetic on an amount crashes
+with `TypeError: unsupported operand type(s) for +: 'int' and 'str'` —
+this is exactly what happened to the first deploy on StudioNet, where
+`create_grant` failed twice and no grant was created. Every public
+method therefore coerces its numeric arguments with `int()` at the entry
+(`_as_u256` in the contract), before any arithmetic, comparison, or
+storage; `int()` is a no-op on values that are already integers, so
+direct SDK calls are unaffected. A string that is not a whole number
+fails with a clean `[EXPECTED] ... must be a whole number` revert
+instead of a bare exception. The DEPLOY_NOTES checklist already passes
+milestone amounts as strings, which is the form this guards.
+
 ## Deploy on StudioNet
 
 1. Open https://studio.genlayer.com/contracts and connect a wallet funded
@@ -209,7 +225,8 @@ pytest tests/direct/ -v
 
 They run the contract in-process with mocked web and LLM responses, so no
 network or funds are needed. Coverage: grant creation and input
-validation, evidence submission permissions, approval paying both
+validation, Studio-form string numbers accepted and stored as integers,
+evidence submission permissions, approval paying both
 milestones to completion, rejection, validator agreement and disagreement
 (per-criterion and score-band), appeal then approval, second rejection
 final, cancellation after the deadline, unreachable evidence (`[EXTERNAL]`
