@@ -236,6 +236,110 @@ def test_create_grant_rejects_non_numeric_string_amount():
         vm.value = 0
 
 
+def test_create_grant_accepts_hex_string_grantee():
+    """Studio's write form sends the grantee as a hex string.
+
+    The deployed contract crashed on this exact call on StudioNet with
+    AttributeError: 'int' object has no attribute 'as_bytes' at the
+    Grant record write: the form's address value arrives as a plain
+    int, the zero-address check silently passes (an int never equals
+    an Address), and AddrDesc.set then calls .as_bytes on the int.
+    The contract coerces the grantee to a real Address itself, so the
+    same call must succeed and store proper Address objects for both
+    parties. The funder is gl.message.sender_address, already an
+    Address at runtime; the stored funder is asserted here rather than
+    converted.
+    """
+    vm = _setup()
+    with vm.activate():
+        contract, funder, grantee, _stranger = _deploy(vm)
+        # Imported here, not at the top of the test: Address only
+        # becomes importable once _deploy has put the SDK on sys.path.
+        from genlayer.py.types import Address
+
+        grant_id = _create_grant(contract, vm, funder, grantee.as_hex)
+        assert grant_id == 1
+
+        grant = contract.get_grant(grant_id)
+        assert isinstance(grant.grantee, Address)
+        assert isinstance(grant.funder, Address)
+        assert grant.grantee == grantee
+        assert grant.funder == funder
+        assert grant.grantee.as_hex == grantee.as_hex
+        assert grant.funder.as_hex == funder.as_hex
+
+
+def test_create_grant_accepts_int_grantee():
+    """The form's address value can also arrive as a plain int.
+
+    Studio parses the typed hex string into an integer before the
+    call reaches the contract. The contract reads that int as the
+    standard big-endian hex-to-int value (the number int("0x...", 16)
+    produces), so the stored grantee must be the same address that
+    was typed in, not a byte-reversed one.
+    """
+    vm = _setup()
+    with vm.activate():
+        contract, funder, grantee, _stranger = _deploy(vm)
+        # Imported here, not at the top of the test: Address only
+        # becomes importable once _deploy has put the SDK on sys.path.
+        from genlayer.py.types import Address
+
+        grant_id = _create_grant(contract, vm, funder, int(grantee.as_hex, 16))
+        assert grant_id == 1
+
+        grant = contract.get_grant(grant_id)
+        assert isinstance(grant.grantee, Address)
+        assert grant.grantee == grantee
+        assert grant.grantee.as_hex == grantee.as_hex
+        assert grant.funder.as_hex == funder.as_hex
+
+
+def test_create_grant_rejects_zero_address_grantee():
+    """A zero grantee still reverts, in every form it can arrive in.
+
+    Before the fix the check `grantee == Address(bytes(20))` silently
+    passed for an int 0 or a zero hex string, because neither ever
+    equals an Address object; the call then died later at the storage
+    write instead of failing cleanly here.
+    """
+    vm = _setup()
+    with vm.activate():
+        contract, funder, grantee, _stranger = _deploy(vm)
+        # Imported here, not at the top of the test: Address only
+        # becomes importable once _deploy has put the SDK on sys.path.
+        from genlayer.py.types import Address
+
+        vm.sender = funder
+        vm.value = 5 * ONE_GEN
+
+        # Plain int zero, as the Studio form would deliver it.
+        with vm.expect_revert("[EXPECTED] grantee must not be the zero address"):
+            contract.create_grant(
+                0, "G", "D", DEADLINE, ["M"], [5 * ONE_GEN], [1], ["C"]
+            )
+
+        # Zero as a hex string.
+        with vm.expect_revert("[EXPECTED] grantee must not be the zero address"):
+            contract.create_grant(
+                "0x0000000000000000000000000000000000000000",
+                "G",
+                "D",
+                DEADLINE,
+                ["M"],
+                [5 * ONE_GEN],
+                [1],
+                ["C"],
+            )
+
+        # Zero as a real Address object.
+        with vm.expect_revert("[EXPECTED] grantee must not be the zero address"):
+            contract.create_grant(
+                Address(bytes(20)), "G", "D", DEADLINE, ["M"], [5 * ONE_GEN], [1], ["C"]
+            )
+        vm.value = 0
+
+
 def test_string_ids_accepted_by_other_methods():
     """The same form serialization applies to grant and milestone ids.
 
