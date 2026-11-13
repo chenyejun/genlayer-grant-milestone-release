@@ -202,6 +202,25 @@ fails with a clean `[EXPECTED] ... must be a whole number` revert
 instead of a bare exception. The DEPLOY_NOTES checklist already passes
 milestone amounts as strings, which is the form this guards.
 
+The same form behavior applies to addresses, and it bit the second
+deploy: the `grantee` typed into the form arrives in `create_grant`
+as a plain int, not an `Address` object, because Studio does not send
+it through the native calldata address encoding. The zero-address
+check does not catch that — an int never equals an `Address` — and
+the first storage write of the value then crashes with
+`AttributeError: 'int' object has no attribute 'as_bytes'`, inside the
+storage descriptor that writes an address field. `create_grant`
+therefore coerces the grantee with `_as_address` before the zero
+check: an `Address` passes through, a hex string is parsed by the
+`Address` constructor, and an int is read as the standard big-endian
+hex-to-int value (`int("0x...", 16)`), so `to_bytes(20, "big")`
+restores the address bytes. Anything that is not an address at all
+fails with a clean `[EXPECTED] grantee is not a valid address`
+revert. The stored grantee is the check that the encoding assumption
+held: after deploy, `get_grant` must show the grantee's `as_hex`
+equal to the address that was typed in — a byte-reversed value would
+mean the form encoded the int the other way round.
+
 ## Deploy on StudioNet
 
 1. Open https://studio.genlayer.com/contracts and connect a wallet funded
@@ -226,6 +245,8 @@ pytest tests/direct/ -v
 They run the contract in-process with mocked web and LLM responses, so no
 network or funds are needed. Coverage: grant creation and input
 validation, Studio-form string numbers accepted and stored as integers,
+Studio-form hex-string and integer grantees accepted and stored as
+`Address` objects (zero grantee still rejected in all three forms),
 evidence submission permissions, approval paying both
 milestones to completion, rejection, validator agreement and disagreement
 (per-criterion and score-band), appeal then approval, second rejection
